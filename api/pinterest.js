@@ -1,12 +1,14 @@
+const puppeteer = require("puppeteer-core");
+const chromium = require("@sparticuz/chromium");
 const axios = require("axios");
 
-// ===== NORMALIZE URL (pin.it -> pinterest.com) =====
+// ===== normalize pin.it =====
 async function normalizeUrl(url) {
   try {
     if (url.includes("pin.it")) {
       const res = await axios.get(url, {
-        maxRedirects: 5,
-        headers: { "User-Agent": "Mozilla/5.0" }
+        headers: { "User-Agent": "Mozilla/5.0" },
+        maxRedirects: 10
       });
       return res.request.res.responseUrl;
     }
@@ -16,68 +18,103 @@ async function normalizeUrl(url) {
   }
 }
 
-// ===== SCRAPER =====
+// ===== SCRAPE WITH BROWSER =====
 async function scrapePinterest(url) {
+  let browser = null;
+
   try {
-    const { data } = await axios.get(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-US,en;q=0.9"
-      }
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless
     });
 
-    const json = data.match(/<script id="__PWS_DATA__".*?>(.*?)<\/script>/);
-    if (!json) return null;
+    const page = await browser.newPage();
 
-    const parsed = JSON.parse(json[1]);
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+    );
 
-    const pins =
-      parsed?.props?.initialReduxState?.pins ||
-      parsed?.props?.pageProps?.initialReduxState?.pins;
+    await page.goto(url, {
+      waitUntil: "networkidle2",
+      timeout: 60000
+    });
 
-    if (!pins) return null;
+    // ===== EXTRACT DATA =====
+    const result = await page.evaluate(() => {
+      const scripts = Array.from(document.querySelectorAll("script"));
 
-    const key = Object.keys(pins)[0];
-    const pin = pins[key];
+      let jsonData = null;
 
-    // ===== IMAGE =====
-    const image = pin?.images?.orig?.url || null;
+      for (const s of scripts) {
+        if (s.innerText.includes("__PWS_DATA__") || s.innerText.includes("__INITIAL_STATE__")) {
+          const match = s.innerText.match(/{.*}/s);
+          if (match) {
+            try {
+              jsonData = JSON.parse(match[0]);
+              break;
+            } catch {}
+          }
+        }
+      }
 
-    // ===== VIDEO (BEST QUALITY) =====
-    let video = null;
+      if (!jsonData) return null;
 
-    if (pin?.videos?.video_list) {
-      const videos = Object.values(pin.videos.video_list);
+      const pins =
+        jsonData?.props?.initialReduxState?.pins ||
+        jsonData?.pins ||
+        jsonData?.props?.pins;
 
-      const sorted = videos.sort((a, b) => {
-        const aScore = (a.width || 0) * (a.height || 0) || a.bitrate || 0;
-        const bScore = (b.width || 0) * (b.height || 0) || b.bitrate || 0;
-        return bScore - aScore;
-      });
+      if (!pins) return null;
 
-      video = sorted[0]?.url || null;
-    }
+      const key = Object.keys(pins)[0];
+      const pin = pins[key];
 
-    return {
-      image,
-      video,
-      title: pin?.title || null
-    };
+      if (!pin) return null;
+
+      // IMAGE
+      const image = pin?.images?.orig?.url || null;
+
+      // VIDEO BEST QUALITY
+      let video = null;
+
+      const videos = pin?.videos?.video_list;
+      if (videos) {
+        const sorted = Object.values(videos).sort((a, b) => {
+          const aScore = (a.width || 0) * (a.height || 0) || a.bitrate || 0;
+          const bScore = (b.width || 0) * (b.height || 0) || b.bitrate || 0;
+          return bScore - aScore;
+        });
+
+        video = sorted[0]?.url || null;
+      }
+
+      return {
+        image,
+        video,
+        title: pin?.title || null
+      };
+    });
+
+    return result;
 
   } catch (err) {
-    console.log("Scrape error:", err.message);
+    console.log("Puppeteer error:", err.message);
     return null;
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
-// ===== HANDLER VERCEL =====
+// ===== API HANDLER =====
 module.exports = async (req, res) => {
   const { url } = req.query;
 
   if (!url) {
     return res.status(400).json({
       status: false,
-      message: "Parameter url diperlukan"
+      message: "URL diperlukan"
     });
   }
 
@@ -92,7 +129,6 @@ module.exports = async (req, res) => {
       });
     }
 
-    // ===== FORMAT SAMA DENGAN BOT KAMU =====
     return res.status(200).json({
       status: true,
       data: {
