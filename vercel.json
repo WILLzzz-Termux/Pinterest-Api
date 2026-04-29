@@ -1,13 +1,8 @@
 {
-  "functions": {
-    "api/*.py": {
-      "runtime": "python3.11"
-    }
-  },
   "routes": [
     {
       "src": "/api/pinterest",
-      "dest": "/api/pinterest.py"
+      "dest": "/api/pinterest.js"
     }
   ]
 }
