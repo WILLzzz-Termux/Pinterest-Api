@@ -26,13 +26,6 @@ async function pindlVideo(url) {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "GET") {
-    return res.status(405).json({
-      status: false,
-      message: "Method not allowed",
-    });
-  }
-
   const { url } = req.query;
 
   if (!url) {
@@ -45,9 +38,11 @@ export default async function handler(req, res) {
   try {
     const result = await pindlVideo(url);
 
+    console.log("API RESULT:", result);
+
     return res.status(200).json({
       status: true,
-      result: result.data,
+      result: result?.data || result || null,
     });
   } catch (error) {
     return res.status(500).json({
