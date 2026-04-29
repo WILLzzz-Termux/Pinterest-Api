@@ -1,13 +1,6 @@
 const axios = require("axios")
 
 module.exports = async (req, res) => {
-    if (req.method !== "GET") {
-        return res.status(405).json({
-            status: false,
-            message: "Method tidak diizinkan"
-        })
-    }
-
     const { url } = req.query
 
     if (!url) {
@@ -19,7 +12,7 @@ module.exports = async (req, res) => {
 
     try {
         // =========================
-        // 1. VALIDASI URL
+        // 1. FOLLOW REDIRECT
         // =========================
         let finalUrl = url
 
@@ -38,18 +31,30 @@ module.exports = async (req, res) => {
         // 2. AMBIL PIN ID
         // =========================
         const match = finalUrl.match(/\/pin\/(\d+)/)
-
         if (!match) {
             return res.status(400).json({
                 status: false,
-                message: "URL Pinterest tidak valid"
+                message: "URL tidak valid"
             })
         }
 
         const pinId = match[1]
 
         // =========================
-        // 3. REQUEST KE PINTEREST
+        // 3. AMBIL COOKIE DULU
+        // =========================
+        const home = await axios.get("https://www.pinterest.com/", {
+            headers: {
+                "user-agent": "Mozilla/5.0"
+            }
+        })
+
+        const cookies = home.headers["set-cookie"]
+            ?.map(c => c.split(";")[0])
+            .join("; ")
+
+        // =========================
+        // 4. REQUEST PINTEREST
         // =========================
         const { data } = await axios.get(
             "https://www.pinterest.com/resource/PinResource/get/",
@@ -67,9 +72,14 @@ module.exports = async (req, res) => {
                 },
                 headers: {
                     "accept": "application/json, text/javascript, */*, q=0.01",
-                    "user-agent": "Mozilla/5.0",
+                    "accept-language": "en-US,en;q=0.9",
+                    "cache-control": "no-cache",
+                    "pragma": "no-cache",
+                    "user-agent":
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
                     "x-requested-with": "XMLHttpRequest",
-                    "referer": "https://www.pinterest.com/"
+                    "referer": "https://www.pinterest.com/",
+                    "cookie": cookies
                 },
                 timeout: 10000
             }
@@ -85,23 +95,21 @@ module.exports = async (req, res) => {
         }
 
         // =========================
-        // 4. PARSE MEDIA
+        // 5. PARSE MEDIA
         // =========================
         let media = []
 
-        // VIDEO
         if (pin.videos?.video_list) {
-            const first = Object.values(pin.videos.video_list)[0]
-            if (first?.url) {
+            const v = Object.values(pin.videos.video_list)[0]
+            if (v?.url) {
                 media.push({
                     type: "video",
-                    url: first.url,
-                    thumbnail: first.thumbnail
+                    url: v.url,
+                    thumbnail: v.thumbnail
                 })
             }
         }
 
-        // IMAGE
         if (pin.images?.orig?.url) {
             media.push({
                 type: "image",
@@ -109,9 +117,6 @@ module.exports = async (req, res) => {
             })
         }
 
-        // =========================
-        // 5. RESPONSE
-        // =========================
         return res.status(200).json({
             status: true,
             data: {
@@ -127,7 +132,7 @@ module.exports = async (req, res) => {
 
         return res.status(500).json({
             status: false,
-            message: "Internal server error",
+            message: "Gagal ambil data dari Pinterest",
             error: err.message
         })
     }
